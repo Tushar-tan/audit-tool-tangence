@@ -1,0 +1,6 @@
+node_modules
+.next
+.git
+public/uploads/screenshots/*
+dev.db
+dev.db-journal

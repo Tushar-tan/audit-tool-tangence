@@ -1,0 +1,133 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  audits      Audit[]
+}
+
+model Audit {
+  id                 String       @id @default(uuid())
+  projectId          String?
+  project            Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  siteName           String
+  domain             String
+  inputMethod        String       // "urls" | "csv" | "txt" | "sitemap" | "crawler"
+  configJson         String       // JSON string of AuditConfig
+  status             String       // "queued" | "crawling" | "analyzing" | "completed" | "failed"
+  progressPercentage Int          @default(0)
+  
+  // Aggregate Scores & Grade (11 Checklist Categories)
+  overallScore           Int      @default(0)
+  overallGrade           String   @default("A")
+  headerNavScore         Int      @default(0)
+  visualDesignScore      Int      @default(0)
+  responsiveScore        Int      @default(0)
+  contentScore           Int      @default(0)
+  buttonsCtasScore       Int      @default(0)
+  formsScore             Int      @default(0)
+  linksScore             Int      @default(0)
+  imagesMediaScore       Int      @default(0)
+  seoOnPageScore         Int      @default(0)
+  technicalSeoScore      Int      @default(0)
+  securityScore          Int      @default(0)
+
+  // Legacy aliases for backwards compatibility
+  typographyContentScore Int      @default(0)
+  errorStatesScore       Int      @default(0)
+  seoUxScore             Int      @default(0)
+  
+  // Dashboard Summary Metrics
+  totalPages             Int      @default(0)
+  processedPages         Int      @default(0)
+  pagesWithIssues        Int      @default(0)
+  pagesPassed            Int      @default(0)
+  criticalIssuesCount    Int      @default(0)
+  highIssuesCount        Int      @default(0)
+  mediumIssuesCount      Int      @default(0)
+  lowIssuesCount         Int      @default(0)
+  
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  pageAudits             PageAudit[]
+  issues                 AuditIssue[]
+  logs                   CrawlLog[]
+}
+
+model PageAudit {
+  id                  String       @id @default(uuid())
+  auditId             String
+  audit               Audit        @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  url                 String
+  pageTitle           String?
+  httpStatus          Int          @default(200)
+  loadTimeMs          Int          @default(0)
+  
+  // Screenshots
+  desktopScreenshot   String?
+  tabletScreenshot    String?
+  mobileScreenshot    String?
+  fullPageScreenshot  String?
+  annotatedScreenshot String?
+  
+  metricsJson         String       // Raw performance & DOM metrics JSON
+  scoresJson          String       // 10-category scores JSON
+  
+  createdAt           DateTime     @default(now())
+  issues              AuditIssue[]
+}
+
+model AuditIssue {
+  id                  String     @id @default(uuid())
+  issueId             String?
+  pageAuditId         String
+  pageAudit           PageAudit  @relation(fields: [pageAuditId], references: [id], onDelete: Cascade)
+  auditId             String
+  audit               Audit      @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  
+  pageUrl             String     // Exact URL where issue was detected
+  category            String     // "header-navigation" | "overall-visual-design" | "buttons-ctas" | "forms" | "links" | "images-media" | "responsive-design" | "typography-content" | "error-empty-states" | "seo-ux"
+  severity            String     // "critical" | "high" | "medium" | "low"
+  status              String     @default("FAIL") // "PASS" | "FAIL" | "NOT_TESTABLE"
+  viewport            String?    // e.g. "390px × 844px", "1920px × 1080px"
+  
+  title               String     // Issue title
+  problem             String     // Detailed problem description
+  expectedBehavior    String     // Expected behavior
+  actualBehavior      String     // Actual behavior
+  recommendation      String     // Actionable recommendation
+  
+  elementSelector     String?    // CSS selector
+  elementText         String?    // Text of element
+  elementInfo         String?    // Element tag/info description
+  elementBoxJson      String?    // JSON string for coordinates: { x, y, width, height }
+  screenshotUrl       String?    // Screenshot URL or null if unavailable
+  
+  // Duplicate Grouping Support
+  isGrouped           Boolean    @default(false)
+  affectedCount       Int        @default(1)
+  affectedUrlsJson    String?    // JSON array of affected URLs if grouped
+  rootCause           String?
+  
+  createdAt           DateTime   @default(now())
+}
+
+model CrawlLog {
+  id        String   @id @default(uuid())
+  auditId   String
+  audit     Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  level     String   // "info" | "warn" | "error" | "success"
+  message   String
+  timestamp DateTime @default(now())
+}

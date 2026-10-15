@@ -1,0 +1,70 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+Thumbs.db
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files (never commit secrets)
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE / editor config
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code AI tool config
+.claude/
+
+# backup folders (prefixed with bk_ or _bk_)
+src/app/bk_*/
+src/app/_bk_*/
+
+# local machine-specific PM2 configs
+ecosystem.config.local*.js
+ecosystem.local-win.config.js
+
+
+public/css/main.css.bkp25sep2026
+src/app/layout.js.bak25sep2026
+
+*.bak*
+*.bkp*
+
