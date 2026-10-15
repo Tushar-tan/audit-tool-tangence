@@ -10,7 +10,7 @@ RUN apk add --no-cache \
     ca-certificates \
     ttf-freefont
 
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 WORKDIR /app
@@ -29,4 +29,5 @@ EXPOSE 3000
 ENV PORT 3000
 ENV NODE_ENV production
 
-CMD ["npm", "start"]
+# Create/update SQLite tables on the persistent volume, then start
+CMD ["sh", "-c", "npx prisma db push --skip-generate && npm start"]
