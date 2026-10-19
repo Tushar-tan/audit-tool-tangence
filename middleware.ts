@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { jwtVerify } from 'jose';
+import { jwtVerify } from 'jose/jwt/verify';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'tangence-audit-tool-enterprise-jwt-auth-secret-key-32-chars';
 const SECRET_KEY = new TextEncoder().encode(JWT_SECRET);
