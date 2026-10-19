@@ -17,7 +17,7 @@ export function generateMarkdownReport(
 
 - **Target Domain:** https://${audit.domain}
 - **Audit Date:** ${new Date(audit.createdAt).toLocaleDateString()}
-- **Total Pages Audited:** ${audit.totalPages}
+${audit.authType && audit.authType !== 'public' ? `- **Authentication:** ${audit.authType === 'credentials' ? 'Credentials (Username & Password)' : 'Manual Login'} (Status: ${audit.authStatus || 'active'}, Authenticated Pages: ${audit.authPagesAuthenticated ?? 0})\n` : ''}- **Total Pages Audited:** ${audit.totalPages}
 - **Overall Health Score:** ${audit.overallScore}/100 (Grade ${audit.overallGrade || 'A'})
 
 ---

@@ -1,5 +1,64 @@
 export type AuditInputMethod = 'urls' | 'csv' | 'txt' | 'sitemap' | 'crawler';
 
+// ─── Authentication Types ─────────────────────────────────────────────────────
+
+export type AuthMethod = 'credentials' | 'manual';
+
+export interface AuthenticationConfig {
+  /** The method of authentication to use */
+  method: AuthMethod;
+  /** URL of the login page */
+  loginUrl: string;
+  /** Username/email for credential-based login */
+  username?: string;
+  /**
+   * Password for credential-based login.
+   * SECURITY: This is only held in memory during the audit session.
+   * It is never stored to the database, logs, or reports.
+   */
+  password?: string;
+  /** Optional: CSS selector for the username input field */
+  usernameSelector?: string;
+  /** Optional: CSS selector for the password input field */
+  passwordSelector?: string;
+  /** Optional: CSS selector for the submit button */
+  submitSelector?: string;
+  /** Optional: URL pattern or exact URL that indicates successful login */
+  successUrl?: string;
+  /** Optional: CSS selector that is present only when authenticated */
+  successSelector?: string;
+  /** Optional: CSS selector that indicates login failure */
+  failureSelector?: string;
+  /** Optional: additional wait time (ms) after login form submission */
+  additionalWaitMs?: number;
+}
+
+export interface AuthTestResult {
+  success: boolean;
+  method: AuthMethod;
+  finalUrl?: string;
+  errorCode?: AuthErrorCode;
+  errorMessage?: string;
+}
+
+export type AuthErrorCode =
+  | 'INVALID_CREDENTIALS'
+  | 'LOGIN_URL_UNREACHABLE'
+  | 'USERNAME_SELECTOR_NOT_FOUND'
+  | 'PASSWORD_SELECTOR_NOT_FOUND'
+  | 'SUBMIT_SELECTOR_NOT_FOUND'
+  | 'CAPTCHA_DETECTED'
+  | 'TWO_FACTOR_DETECTED'
+  | 'SSO_DETECTED'
+  | 'TIMEOUT'
+  | 'BROWSER_LAUNCH_FAILED'
+  | 'NETWORK_ERROR'
+  | 'UNKNOWN';
+
+// ─── Page Authentication Status ──────────────────────────────────────────────
+
+export type PageAuthStatus = 'authenticated' | 'auth_required' | 'auth_expired' | 'public';
+
 export interface AuditConfig {
   maxPages: number;
   maxDepth: number;
@@ -8,6 +67,8 @@ export interface AuditConfig {
   includePatterns: string[];
   enableAiAnalysis: boolean;
   apiKey?: string;
+  /** Optional authentication configuration. When absent, public crawling is used. */
+  authentication?: AuthenticationConfig;
 }
 
 export type IssueCategory =

@@ -194,6 +194,21 @@ export function generateHtmlReport(
       <div class="meta">Domain: ${audit.domain} | Date: ${dateStr}</div>
     </div>
 
+    ${audit.authType && audit.authType !== 'public' ? `
+    <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 16px 20px; margin-bottom: 28px;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+        <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: ${audit.authStatus === 'authenticated' ? '#10b981' : audit.authStatus === 'expired' ? '#f59e0b' : '#ef4444'};"></span>
+        <strong style="color: #f59e0b; text-transform: uppercase; font-size: 13px; letter-spacing: 0.05em;">Authentication Details</strong>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; font-size: 13px;">
+        <div><span style="color: #94a3b8;">Method:</span> <strong>${audit.authType === 'credentials' ? 'Username & Password' : 'Manual Login'}</strong></div>
+        <div><span style="color: #94a3b8;">Status:</span> <strong style="color: ${audit.authStatus === 'authenticated' ? '#10b981' : '#f59e0b'};">${audit.authStatus === 'authenticated' ? '✓ Authenticated' : audit.authStatus ?? '—'}</strong></div>
+        <div><span style="color: #94a3b8;">Auth Pages Audited:</span> <strong>${audit.authPagesAuthenticated ?? 0}</strong></div>
+        <div><span style="color: #94a3b8;">Auth Failures:</span> <strong>${audit.authPagesFailed ?? 0}</strong></div>
+      </div>
+      ${audit.authExpiredAt ? `<div style="margin-top: 8px; font-size: 12px; color: #fbbf24;">⚠ Session expired at ${audit.authExpiredAt}</div>` : ''}
+    </div>` : ''}
+
     <!-- Summary Dashboard -->
     <h2>Summary Dashboard</h2>
     <div class="dashboard-grid">

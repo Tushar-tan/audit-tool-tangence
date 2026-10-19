@@ -1,4 +1,4 @@
-import puppeteer, { Browser } from 'puppeteer';
+import puppeteer, { Browser, Page } from 'puppeteer';
 import fs from 'fs/promises';
 import path from 'path';
 import { PageMetricsData, ResponsiveViewportCheck, ElementBox } from '../types/audit';
@@ -14,6 +14,8 @@ export interface PageCaptureResult {
   fullPageScreenshotPath: string;
   metrics: PageMetricsData;
   discoveredLinks: string[];
+  /** undefined for public pages; 'authenticated' | 'auth_required' | 'auth_expired' for authenticated crawls */
+  authStatus?: 'authenticated' | 'auth_required' | 'auth_expired' | 'public';
 }
 
 let browserInstance: Browser | null = null;
@@ -97,87 +99,173 @@ const REQUIRED_VIEWPORTS = [
   { width: 1920, height: 1080, label: '1920px (Full HD Desktop)' }
 ];
 
-export async function capturePageData(
+/**
+ * Helper to ensure modern client-side hydrated frontends (Next.js, React, Vue, SPAs)
+ * have completely loaded, hydrated, and rendered all dynamic/lazy elements.
+ */
+export async function waitForFrontendToSettle(page: Page): Promise<void> {
+  try {
+    // 1. Ensure document load state is ready
+    await page.evaluate(() => {
+      return new Promise<void>((resolve) => {
+        if (document.readyState === 'complete') {
+          resolve();
+        } else {
+          window.addEventListener('load', () => resolve(), { once: true });
+          setTimeout(resolve, 3000);
+        }
+      });
+    }).catch(() => {});
+
+    // 2. Wait for web fonts if supported
+    await page.evaluate(() => {
+      if ('fonts' in document && (document as any).fonts?.ready) {
+        return (document as any).fonts.ready.catch(() => {});
+      }
+    }).catch(() => {});
+
+    // 3. Pause for client-side JS / React / Vue hydration to execute
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // 4. Scroll smoothly down the page to trigger IntersectionObserver,
+    // lazy-loaded images (loading="lazy", data-src), dynamic widgets and footer links.
+    await page.evaluate(async () => {
+      await new Promise<void>((resolve) => {
+        let totalHeight = 0;
+        const distance = 450;
+        const scrollTimer = setInterval(() => {
+          const scrollHeight = Math.max(
+            document.body?.scrollHeight || 0,
+            document.documentElement?.scrollHeight || 0,
+            document.body?.offsetHeight || 0,
+            document.documentElement?.offsetHeight || 0
+          );
+          window.scrollBy(0, distance);
+          totalHeight += distance;
+
+          if (totalHeight >= scrollHeight || totalHeight >= 12000) {
+            clearInterval(scrollTimer);
+            window.scrollTo({ top: 0, behavior: 'instant' as any });
+            resolve();
+          }
+        }, 70);
+
+        setTimeout(() => {
+          clearInterval(scrollTimer);
+          window.scrollTo({ top: 0, behavior: 'instant' as any });
+          resolve();
+        }, 2800);
+      });
+    }).catch(() => {});
+
+    // 5. Brief pause after returning to top for layout and paint to settle
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  } catch {
+    // Non-fatal
+  }
+}
+
+function createEmptyMetrics(
+  targetUrl: string,
+  httpStatus: number,
+  loadTimeMs: number,
+  pageTitle: string
+): PageMetricsData {
+  return {
+    url: targetUrl,
+    pageTitle,
+    httpStatus,
+    loadTimeMs,
+    domElementCount: 0,
+    textWordCount: 0,
+    hasHeader: false,
+    hasLogo: false,
+    logoHrefs: [],
+    logoLinksToHome: false,
+    navLinks: [],
+    hasHashNavLinks: false,
+    dropdownMenusCount: 0,
+    dropdownsWork: true,
+    dropdownCutOff: false,
+    navSpacingConsistent: true,
+    headerCtaWorks: false,
+    hasMobileMenu: false,
+    mobileMenuOpens: false,
+    mobileMenuCloses: false,
+    mobileNavOverflow: false,
+    menuItemUrlsValid: true,
+    invalidMenuUrls: [],
+    fontFamilies: [],
+    fontsConsistent: true,
+    fontWeights: [],
+    fontWeightsConsistent: true,
+    fontSizes: [],
+    fontSizesConsistent: true,
+    lineHeightsOutOfRangeCount: 0,
+    overlappingElementsCount: 0,
+    overlappingElementsList: [],
+    hasBrokenLayout: false,
+    brokenLayoutDetails: [],
+    viewportChecks: [],
+    desktopHasHorizontalScroll: false,
+    spellingGrammarErrors: [],
+    duplicateContentBlocks: [],
+    placeholderTextDetected: false,
+    placeholderPhrases: [],
+    loremIpsumDetected: false,
+    inContentLinksWork: true,
+    brokenInContentLinks: [],
+    buttons: [],
+    forms: [],
+    links: [],
+    images: [],
+    metaTags: {},
+    hasUniqueTitle: false,
+    hasMetaDescription: false,
+    h1Count: 0,
+    h1List: [],
+    imagesMissingAltCount: 0,
+    hasValidCanonical: false,
+    hasOpenGraphTags: false,
+    hasTwitterCardTags: false,
+    hasSitemapXml: false,
+    hasRobotsTxt: false,
+    isHttps: targetUrl.startsWith('https://'),
+    httpRedirectsToHttps: false,
+    redirects301Work: false,
+    is404Page: httpStatus === 404,
+    hasStructuredData: false,
+    hasLlmsTxt: false,
+    sslValid: true,
+    httpsEnforced: false,
+    googleAnalyticsInstalled: false,
+    networkRequests: [],
+    jsConsoleErrors: []
+  };
+}
+
+interface InternalExtractOptions {
+  consoleErrors: string[];
+  networkRequests: { url: string; resourceType: string; size: number; durationMs: number; status: number }[];
+  imageSizeMap: Map<string, number>;
+  httpStatus: number;
+  sslValid: boolean;
+  loadTimeMs: number;
+  authStatus?: 'authenticated' | 'auth_required' | 'auth_expired' | 'public';
+}
+
+async function internalExtractPageData(
+  page: Page,
   targetUrl: string,
   auditId: string,
-  pageIndex: number
+  pageIndex: number,
+  options: InternalExtractOptions
 ): Promise<PageCaptureResult> {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
+  const { consoleErrors, networkRequests, imageSizeMap, httpStatus, sslValid, loadTimeMs, authStatus = 'public' } = options;
+  const pageTitle = (await page.title().catch(() => '')) || '';
 
-  const consoleErrors: string[] = [];
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') {
-      consoleErrors.push(msg.text());
-    }
-  });
-
-  const networkRequests: { url: string; resourceType: string; size: number; durationMs: number; status: number }[] = [];
-  const requestStartTimes = new Map<string, number>();
-  const imageSizeMap = new Map<string, number>();
-
-  page.on('request', (req) => {
-    requestStartTimes.set(req.url(), Date.now());
-  });
-
-  page.on('response', async (res) => {
-    const reqUrl = res.url();
-    const startTime = requestStartTimes.get(reqUrl) || Date.now();
-    const durationMs = Date.now() - startTime;
-    let contentLength = parseInt(res.headers()['content-length'] || '0', 10);
-    const resourceType = res.request().resourceType();
-
-    if (resourceType === 'image' || /\.(jpe?g|png|webp|avif|gif)($|\?)/i.test(reqUrl)) {
-      if (!contentLength || contentLength <= 0) {
-        try {
-          const buf = await res.buffer();
-          contentLength = buf ? buf.length : 0;
-        } catch {
-          // ignore
-        }
-      }
-      if (contentLength > 0) {
-        imageSizeMap.set(reqUrl, contentLength);
-        const clean = reqUrl.split('?')[0].split('#')[0];
-        imageSizeMap.set(clean, contentLength);
-      }
-    }
-
-    networkRequests.push({
-      url: reqUrl,
-      resourceType,
-      size: contentLength,
-      durationMs,
-      status: res.status()
-    });
-  });
-
-  // Ensure output screenshot directory exists
-  const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'screenshots', auditId);
-  await fs.mkdir(uploadDir, { recursive: true });
-
-  const startTime = Date.now();
-  let httpStatus = 200;
-  let sslValid = true;
-
-  try {
-    const response = await page.goto(targetUrl, {
-      waitUntil: 'networkidle2',
-      timeout: 30000
-    });
-    if (response) {
-      httpStatus = response.status();
-    }
-  } catch (err: any) {
-    if (err.message && (err.message.includes('SSL') || err.message.includes('CERT'))) {
-      sslValid = false;
-    }
-    console.warn(`Error loading ${targetUrl}:`, err.message);
-    httpStatus = httpStatus === 200 ? 500 : httpStatus;
-  }
-
-  const loadTimeMs = Date.now() - startTime;
-  const pageTitle = await page.title();
+  // 1. Ensure frontend has fully settled (SPA hydration, web fonts, lazy scroll)
+  await waitForFrontendToSettle(page);
 
   // 1. Capture Desktop Viewport (1920x1080)
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
@@ -646,9 +734,98 @@ export async function capturePageData(
       const isExternal = !!href && (href.startsWith('http://') || href.startsWith('https://')) && !href.includes(window.location.hostname);
       const opensInNewTab = anchor ? anchor.getAttribute('target') === '_blank' : false;
       
-      const hasDeadHref = href === '#' || href === 'javascript:void(0)' || href === 'javascript:;' || href === '';
-      const isDeadButtonTag = b.tagName === 'BUTTON' && !(b as HTMLButtonElement).onclick && (b as HTMLButtonElement).type !== 'submit' && !b.getAttribute('form') && !b.getAttribute('data-toggle') && !b.getAttribute('data-bs-toggle') && !b.getAttribute('aria-controls');
-      const isDead = (anchor && hasDeadHref) || (!anchor && (hasDeadHref || isDeadButtonTag));
+      // Check if button has active functionality or interactive bindings:
+      const hasInlineOnclick = Boolean((b as HTMLElement).onclick || b.getAttribute('onclick'));
+      const isSubmitOrReset = (b as HTMLButtonElement).type === 'submit' || (b as HTMLButtonElement).type === 'reset';
+      const hasFormParent = Boolean(b.closest('form') || b.getAttribute('form'));
+      
+      // React / Vue / Webflow component bindings:
+      const hasReactProps = Object.keys(b).some((k) => k.startsWith('__reactProps') || k.startsWith('__reactFiber') || k.startsWith('__reactEvents'));
+      const hasVue = Boolean((b as any).__vue__ || (b as any).__vueParentComponent);
+      const hasWebflow = Boolean(b.getAttribute('data-w-id') || b.closest('[data-w-id]'));
+      
+      // Interactive data attributes (Bootstrap, Alpine, custom data-* actions):
+      const hasDataAction = Array.from(b.attributes).some((attr) => {
+        const name = attr.name.toLowerCase();
+        return name.startsWith('data-') && (
+          name.includes('action') ||
+          name.includes('target') ||
+          name.includes('toggle') ||
+          name.includes('bs-') ||
+          name.includes('slide') ||
+          name.includes('tab') ||
+          name.includes('modal') ||
+          name.includes('popup') ||
+          name.includes('filter') ||
+          name.includes('click') ||
+          name.includes('nav') ||
+          name.includes('next') ||
+          name.includes('prev') ||
+          name.includes('page') ||
+          name.includes('url') ||
+          name.includes('href') ||
+          name.includes('id') ||
+          name.includes('control')
+        );
+      });
+
+      // ARIA interactive attributes:
+      const hasAriaAction = Boolean(
+        b.getAttribute('aria-controls') ||
+        b.getAttribute('aria-haspopup') ||
+        b.getAttribute('aria-expanded') !== null ||
+        b.getAttribute('aria-pressed') !== null ||
+        b.getAttribute('aria-selected') !== null ||
+        b.getAttribute('role') === 'tab' ||
+        b.getAttribute('role') === 'switch'
+      );
+
+      // Interactive UI pattern in classes, ID, or text (e.g. Next project, carousel, tabs, modals):
+      const bClassLower = (b.className && typeof b.className === 'string' ? b.className : '').toLowerCase();
+      const bIdLower = (b.id || '').toLowerCase();
+      const bTextLower = (txt || '').toLowerCase();
+      const isInteractivePattern = /(next|prev|previous|slide|slider|carousel|swiper|slick|tab|accordion|modal|popup|dropdown|filter|toggle|collapse|menu|load-more|show-more|pagination|project)/i.test(
+        `${bClassLower} ${bIdLower} ${bTextLower}`
+      );
+
+      // Inside an interactive widget container:
+      const isInInteractiveWidget = Boolean(
+        b.closest('.swiper, .slick-slider, .carousel, .slider, .tabs, .accordion, .modal, .dialog, [role="tablist"], .pagination, .project-nav, .portfolio-nav')
+      );
+
+      // Destination target evaluation:
+      // Real destination URLs or in-page fragment IDs (e.g. href="#contact" or href="#project-2" where length > 1) are functional targets!
+      const hasValidFragmentHref = Boolean(href && href.startsWith('#') && href.length > 1);
+      const hasValidUrlHref = Boolean(href && !hasValidFragmentHref && href !== '#' && href !== 'javascript:void(0)' && href !== 'javascript:;' && href.trim() !== '');
+      const hasDeadHref = !hasValidUrlHref && !hasValidFragmentHref;
+
+      // Has functional behavior:
+      const hasAction = hasInlineOnclick ||
+        isSubmitOrReset ||
+        hasFormParent ||
+        hasReactProps ||
+        hasVue ||
+        hasWebflow ||
+        hasDataAction ||
+        hasAriaAction ||
+        isInteractivePattern ||
+        isInInteractiveWidget ||
+        hasValidUrlHref ||
+        hasValidFragmentHref;
+
+      // Determine isDead:
+      // An interactive button (like "Next project") with an action/pattern/handler is NEVER dead.
+      // An anchor or CTA button is dead only when its destination is empty/dead (# or javascript:void(0)) AND it has no functional action.
+      let isDead = false;
+      if (anchor) {
+        isDead = hasDeadHref && !hasAction;
+      } else if (b.tagName === 'BUTTON') {
+        // Native <button> elements are designed for JS interactions.
+        // A <button> with text or an interactive pattern is functional, not dead.
+        isDead = !hasAction && !txt;
+      } else {
+        isDead = hasDeadHref && !hasAction;
+      }
 
       const isDisabled = (b as HTMLButtonElement).disabled || b.getAttribute('aria-disabled') === 'true';
 
@@ -753,7 +930,7 @@ export async function capturePageData(
     const allAnchors = Array.from(document.querySelectorAll('a'));
     const socialDomains = ['facebook.com', 'twitter.com', 'x.com', 'linkedin.com', 'instagram.com', 'youtube.com', 'tiktok.com', 'github.com', 'pinterest.com'];
 
-    allAnchors.slice(0, 50).forEach((a) => {
+    allAnchors.slice(0, 100).forEach((a) => {
       const href = a.getAttribute('href') || '';
       const txt = (a.innerText || a.getAttribute('title') || '').trim();
       let linkType: 'internal' | 'external' | 'anchor' | 'download' | 'tel' | 'mailto' | 'social' | 'empty' | 'broken' = 'internal';
@@ -837,7 +1014,7 @@ export async function capturePageData(
       const naturalH = img.naturalHeight;
       const displayW = Math.round(rect.width);
       const displayH = Math.round(rect.height);
-      const src = img.src || img.getAttribute('data-src') || '';
+      const src = img.currentSrc || img.src || img.getAttribute('data-src') || '';
       
       const isJpg = /\.jpe?g($|\?)/i.test(src);
       const isPng = /\.png($|\?)/i.test(src);
@@ -853,13 +1030,21 @@ export async function capturePageData(
         // ignore
       }
 
+      // Check if image is potentially broken in the browser DOM:
+      // An image that loaded dimensions (naturalW > 0) is never broken.
+      // An image with !img.complete is still loading/lazy (not confirmed broken).
+      // SVGs or data URIs can have 0x0 natural dimensions without being broken.
+      const hasRealSrc = !!src && src !== 'about:blank' && !src.startsWith('javascript:') && src !== '#';
+      const isSvgOrData = format === 'svg' || src.startsWith('data:') || src.includes('.svg');
+      const isBrokenInDom = hasRealSrc && !isSvgOrData && img.complete && naturalW === 0 && naturalH === 0;
+
       imagesList.push({
         src,
         selector: img.id ? `#${img.id}` : img.className ? `img.${img.className.split(' ')[0]}` : `img:nth-of-type(${idx + 1})`,
         alt: alt || undefined,
         hasAlt,
         isDecorative,
-        isBroken: naturalW === 0 && !!src,
+        isBroken: isBrokenInDom,
         isHeavyRaster: false, // will be resolved with exact file size in node
         format,
         naturalWidth: naturalW,
@@ -984,47 +1169,142 @@ export async function capturePageData(
 
       domElementCount: document.querySelectorAll('*').length,
       textWordCount: bodyText.split(/\s+/).filter(Boolean).length,
-      discoveredLinks: allAnchors.map((a) => a.href).filter((h) => h && h.startsWith('http'))
+      discoveredLinks: (() => {
+        // Collect all discoverable links across the fully hydrated frontend:
+        // Standard anchors, elements with data-href/data-url/data-link, and role="link"
+        const linkSet = new Set<string>();
+        const baseUri = document.baseURI || window.location.href;
+
+        const candidates = Array.from(
+          document.querySelectorAll('a[href], [data-href], [data-url], [data-link], [role="link"]')
+        );
+
+        candidates.forEach((el) => {
+          let rawHref =
+            el.getAttribute('href') ||
+            el.getAttribute('data-href') ||
+            el.getAttribute('data-url') ||
+            el.getAttribute('data-link');
+
+          if (!rawHref && el instanceof HTMLAnchorElement && el.href) {
+            rawHref = el.href;
+          }
+
+          if (rawHref && typeof rawHref === 'string') {
+            const trimmed = rawHref.trim();
+            if (
+              trimmed &&
+              !trimmed.startsWith('#') &&
+              !trimmed.startsWith('javascript:') &&
+              !trimmed.startsWith('mailto:') &&
+              !trimmed.startsWith('tel:') &&
+              !trimmed.startsWith('data:') &&
+              !trimmed.startsWith('blob:')
+            ) {
+              try {
+                const resolved = new URL(trimmed, baseUri).href;
+                if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+                  linkSet.add(resolved);
+                }
+              } catch {
+                // Ignore malformed URL
+              }
+            }
+          }
+        });
+
+        // Ensure all rendered standard anchors are captured
+        allAnchors.forEach((a) => {
+          if (a.href && (a.href.startsWith('http://') || a.href.startsWith('https://'))) {
+            linkSet.add(a.href);
+          }
+        });
+
+        return Array.from(linkSet);
+      })()
     };
   }, targetUrl);
 
-  await page.close();
+  // Note: page lifecycle is managed by caller (capturePageData closes; capturePageDataAuthenticated reuses)
 
-  // Resolve exact image file sizes and determine heavy raster (JPG/PNG and size >= 1 MB)
+  // Resolve exact image file sizes, verify broken image status, and determine heavy raster (JPG/PNG and size >= 1 MB)
   const ONE_MB = 1024 * 1024; // 1,048,576 bytes
   for (const img of domData.images) {
     let size = img.fileSizeBytes || 0;
     if (!size && imageSizeMap.has(img.src)) {
       size = imageSizeMap.get(img.src)!;
     }
-    if (!size) {
-      const clean = img.src.split('?')[0].split('#')[0];
-      if (imageSizeMap.has(clean)) {
-        size = imageSizeMap.get(clean)!;
-      }
+    const clean = img.src.split('?')[0].split('#')[0];
+    if (!size && imageSizeMap.has(clean)) {
+      size = imageSizeMap.get(clean)!;
     }
 
+    const isHttp = img.src.startsWith('http://') || img.src.startsWith('https://');
     const isJpgOrPng = img.format === 'jpg' || img.format === 'png' || /\.jpe?g($|\?)/i.test(img.src) || /\.png($|\?)/i.test(img.src);
 
-    // If still missing and it is a JPG/PNG, do a quick network HEAD or GET to inspect content-length / size
-    if (!size && isJpgOrPng && img.src.startsWith('http')) {
+    // Look for network response status captured during page load
+    const matchedReq = networkRequests.find(
+      (r) => r.url === img.src || r.url === clean || (img.src && r.url && (r.url.endsWith(clean) || clean.endsWith(r.url)))
+    );
+
+    // If still missing size and it is an HTTP asset, do a quick network check
+    if (!size && isHttp) {
       try {
         const headRes = await fetch(img.src, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-        const cl = parseInt(headRes.headers.get('content-length') || '0', 10);
-        if (cl > 0) {
-          size = cl;
+        if (headRes.ok || (headRes.status >= 200 && headRes.status < 400)) {
+          const cl = parseInt(headRes.headers.get('content-length') || '0', 10);
+          if (cl > 0) size = cl;
+        } else if (headRes.status === 404 || headRes.status === 410 || headRes.status >= 500) {
+          img.isBroken = true;
         } else {
-          const getRes = await fetch(img.src, { method: 'GET', signal: AbortSignal.timeout(4000) });
-          const cl2 = parseInt(getRes.headers.get('content-length') || '0', 10);
-          if (cl2 > 0) {
-            size = cl2;
-          } else if (getRes.body) {
-            const arrayBuf = await getRes.arrayBuffer();
-            size = arrayBuf.byteLength;
+          const getRes = await fetch(img.src, { method: 'GET', signal: AbortSignal.timeout(3000) });
+          if (getRes.ok || (getRes.status >= 200 && getRes.status < 400)) {
+            const cl2 = parseInt(getRes.headers.get('content-length') || '0', 10);
+            if (cl2 > 0) {
+              size = cl2;
+            } else if (getRes.body) {
+              const arrayBuf = await getRes.arrayBuffer();
+              size = arrayBuf.byteLength;
+            }
+          } else if (getRes.status === 404 || getRes.status === 410 || getRes.status >= 500) {
+            img.isBroken = true;
           }
         }
       } catch {
-        // ignore
+        // Network fetch threw (DNS / connection error)
+        if (img.naturalWidth === 0 && img.naturalHeight === 0 && (!size || size === 0)) {
+          img.isBroken = true;
+        }
+      }
+    }
+
+    // Accurate broken verification:
+    // 1. If naturalWidth > 0 && naturalHeight > 0, it was successfully decoded/rendered in browser
+    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+      img.isBroken = false;
+    } else if (matchedReq && matchedReq.status >= 200 && matchedReq.status < 400 && (size > 0 || matchedReq.size > 0)) {
+      // 2. Network request returned 2xx/3xx with body in browser
+      img.isBroken = false;
+    } else if (matchedReq && (matchedReq.status >= 400 || matchedReq.status === 0)) {
+      // 3. Network request returned 404, 500, or failed
+      img.isBroken = true;
+    } else if (img.src.startsWith('data:image/')) {
+      // 4. Valid inline data URI
+      img.isBroken = false;
+    } else if (!img.src || img.src === 'about:blank' || img.src.startsWith('javascript:') || img.src === '#') {
+      // 5. Not a real external image asset
+      img.isBroken = false;
+    } else if (img.isBroken && isHttp && !size) {
+      // 6. Verify with HEAD/GET before confirming broken
+      try {
+        const checkRes = await fetch(img.src, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
+        if (checkRes.ok || (checkRes.status >= 200 && checkRes.status < 400)) {
+          img.isBroken = false;
+        } else if (checkRes.status >= 400) {
+          img.isBroken = true;
+        }
+      } catch {
+        img.isBroken = true;
       }
     }
 
@@ -1202,6 +1482,246 @@ export async function capturePageData(
     mobileScreenshotPath: mobileRelPath,
     fullPageScreenshotPath: fullPageRelPath,
     metrics: pageMetrics,
-    discoveredLinks: domData.discoveredLinks
+    discoveredLinks: domData.discoveredLinks,
+    authStatus
+  };
+}
+
+/**
+ * capturePageData (Public Crawling)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Opens a new tab, navigates to targetUrl, extracts metrics/screenshots
+ * after frontend settles, and closes the tab.
+ */
+export async function capturePageData(
+  targetUrl: string,
+  auditId: string,
+  pageIndex: number
+): Promise<PageCaptureResult> {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+
+  const consoleErrors: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') {
+      consoleErrors.push(msg.text());
+    }
+  });
+
+  const networkRequests: { url: string; resourceType: string; size: number; durationMs: number; status: number }[] = [];
+  const requestStartTimes = new Map<string, number>();
+  const imageSizeMap = new Map<string, number>();
+
+  page.on('request', (req) => {
+    requestStartTimes.set(req.url(), Date.now());
+  });
+
+  page.on('requestfailed', (req) => {
+    networkRequests.push({
+      url: req.url(),
+      resourceType: req.resourceType(),
+      size: 0,
+      durationMs: 0,
+      status: 0
+    });
+  });
+
+  page.on('response', async (res) => {
+    const reqUrl = res.url();
+    const startTime = requestStartTimes.get(reqUrl) || Date.now();
+    const durationMs = Date.now() - startTime;
+    let contentLength = parseInt(res.headers()['content-length'] || '0', 10);
+    const resourceType = res.request().resourceType();
+
+    if (resourceType === 'image' || /\.(jpe?g|png|webp|avif|gif)($|\?)/i.test(reqUrl)) {
+      if (!contentLength || contentLength <= 0) {
+        try {
+          const buf = await res.buffer();
+          contentLength = buf ? buf.length : 0;
+        } catch {
+          // ignore
+        }
+      }
+      if (contentLength > 0) {
+        imageSizeMap.set(reqUrl, contentLength);
+        const clean = reqUrl.split('?')[0].split('#')[0];
+        imageSizeMap.set(clean, contentLength);
+      }
+    }
+
+    networkRequests.push({
+      url: reqUrl,
+      resourceType,
+      size: contentLength,
+      durationMs,
+      status: res.status()
+    });
+  });
+
+  const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'screenshots', auditId);
+  await fs.mkdir(uploadDir, { recursive: true });
+
+  const startTime = Date.now();
+  let httpStatus = 200;
+  let sslValid = true;
+
+  try {
+    const response = await page.goto(targetUrl, {
+      waitUntil: 'networkidle2',
+      timeout: 35000
+    });
+    if (response) {
+      httpStatus = response.status();
+    }
+  } catch (err: any) {
+    if (err.message && (err.message.includes('SSL') || err.message.includes('CERT'))) {
+      sslValid = false;
+    }
+    console.warn(`Error loading ${targetUrl}:`, err.message);
+    httpStatus = httpStatus === 200 ? 500 : httpStatus;
+  }
+
+  const loadTimeMs = Date.now() - startTime;
+
+  try {
+    return await internalExtractPageData(page, targetUrl, auditId, pageIndex, {
+      consoleErrors,
+      networkRequests,
+      imageSizeMap,
+      httpStatus,
+      sslValid,
+      loadTimeMs,
+      authStatus: 'public'
+    });
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+/**
+ * capturePageDataAuthenticated (Authenticated Crawling)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Captures page data directly using the authenticated Puppeteer Page object.
+ * Checks for session expiry / login redirect. If authenticated, executes full
+ * frontend settling, responsive checks, and DOM extraction in the live session.
+ * Does NOT close the page — the crawler session manager maintains it.
+ */
+export async function capturePageDataAuthenticated(
+  page: Page,
+  targetUrl: string,
+  auditId: string,
+  pageIndex: number,
+  loginUrl: string
+): Promise<PageCaptureResult & { authStatus: 'authenticated' | 'auth_required' | 'auth_expired' }> {
+  const { checkAuthExpiry } = await import('./auth-engine');
+
+  const consoleErrors: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(msg.text());
+  });
+
+  const networkRequests: { url: string; resourceType: string; size: number; durationMs: number; status: number }[] = [];
+  const requestStartTimes = new Map<string, number>();
+  const imageSizeMap = new Map<string, number>();
+
+  page.on('request', (req) => {
+    requestStartTimes.set(req.url(), Date.now());
+  });
+
+  page.on('requestfailed', (req) => {
+    networkRequests.push({
+      url: req.url(),
+      resourceType: req.resourceType(),
+      size: 0,
+      durationMs: 0,
+      status: 0
+    });
+  });
+
+  page.on('response', async (res) => {
+    const reqUrl = res.url();
+    const startTime = requestStartTimes.get(reqUrl) || Date.now();
+    const durationMs = Date.now() - startTime;
+    let contentLength = parseInt(res.headers()['content-length'] || '0', 10);
+    const resourceType = res.request().resourceType();
+    if (resourceType === 'image' || /\.(jpe?g|png|webp|avif|gif)($|\?)/i.test(reqUrl)) {
+      if (!contentLength || contentLength <= 0) {
+        try { const buf = await res.buffer(); contentLength = buf ? buf.length : 0; } catch { /* ignore */ }
+      }
+      if (contentLength > 0) {
+        imageSizeMap.set(reqUrl, contentLength);
+        imageSizeMap.set(reqUrl.split('?')[0].split('#')[0], contentLength);
+      }
+    }
+    networkRequests.push({ url: reqUrl, resourceType, size: contentLength, durationMs, status: res.status() });
+  });
+
+  const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'screenshots', auditId);
+  await fs.mkdir(uploadDir, { recursive: true });
+
+  const startTime = Date.now();
+  let httpStatus = 200;
+  let sslValid = true;
+  let authStatus: 'authenticated' | 'auth_required' | 'auth_expired' = 'authenticated';
+
+  try {
+    const response = await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 35000 });
+    if (response) {
+      httpStatus = response.status();
+      if (httpStatus === 401 || httpStatus === 403) {
+        authStatus = 'auth_required';
+      }
+    }
+  } catch (err: any) {
+    if (err.message?.includes('SSL') || err.message?.includes('CERT')) sslValid = false;
+    if (err.message?.includes('ERR_INVALID_AUTH_CREDENTIALS')) {
+      httpStatus = 401;
+      authStatus = 'auth_required';
+    } else {
+      httpStatus = httpStatus === 200 ? 500 : httpStatus;
+    }
+  }
+
+  // Detect auth expiry: redirected back to login page?
+  if (authStatus === 'authenticated') {
+    const expired = await checkAuthExpiry(page, loginUrl);
+    if (expired) authStatus = 'auth_expired';
+  }
+
+  const loadTimeMs = Date.now() - startTime;
+
+  // If auth expired or required, return early with clean minimal fallback (avoid extra hanging requests)
+  if (authStatus === 'auth_expired' || authStatus === 'auth_required') {
+    const pageTitle = (await page.title().catch(() => '')) || 'Authentication Required';
+    return {
+      url: targetUrl,
+      pageTitle,
+      httpStatus,
+      loadTimeMs,
+      desktopScreenshotPath: '',
+      tabletScreenshotPath: '',
+      mobileScreenshotPath: '',
+      fullPageScreenshotPath: '',
+      metrics: createEmptyMetrics(targetUrl, httpStatus, loadTimeMs, pageTitle),
+      discoveredLinks: [],
+      authStatus
+    };
+  }
+
+  // Authenticated session is active: extract full frontend metrics and screenshots
+  // directly on the authenticated page session
+  const captureResult = await internalExtractPageData(page, targetUrl, auditId, pageIndex, {
+    consoleErrors,
+    networkRequests,
+    imageSizeMap,
+    httpStatus,
+    sslValid,
+    loadTimeMs,
+    authStatus: 'authenticated'
+  });
+
+  return {
+    ...captureResult,
+    authStatus: 'authenticated'
   };
 }

@@ -26,6 +26,18 @@ export async function generateDocxReport(
               new TextRun(`Grade ${audit.overallGrade || 'A'}`)
             ]
           }),
+          ...(audit.authType && audit.authType !== 'public'
+            ? [
+                new Paragraph({
+                  children: [
+                    new TextRun({ text: 'Authentication: ', bold: true }),
+                    new TextRun(
+                      `${audit.authType === 'credentials' ? 'Credentials (User/Pass)' : 'Manual Login'} | Status: ${audit.authStatus || '—'} | Authenticated Pages: ${audit.authPagesAuthenticated ?? 0} | Failures: ${audit.authPagesFailed ?? 0}`
+                    ),
+                  ],
+                }),
+              ]
+            : []),
           new Paragraph({ text: '' }),
           new Paragraph({
             text: 'Summary Dashboard',

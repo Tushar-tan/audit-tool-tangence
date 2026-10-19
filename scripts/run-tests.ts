@@ -200,6 +200,43 @@ test('Buttons & CTAs Analyzer Flags Dead Buttons and External Same-Tab Targets',
   assert.ok(res.issues.some((i) => i.title.includes('Dead / Empty Button Action')));
 });
 
+// 7b. Test Buttons & CTAs Analyzer does not flag functional Next project buttons
+test('Buttons & CTAs Analyzer Does Not Flag Functional Buttons Like "Next project"', () => {
+  const mockMetrics: any = {
+    url: 'https://example.com/portfolio',
+    buttons: [
+      {
+        text: 'Next project',
+        selector: 'button.next-project-btn',
+        box: { x: 500, y: 400, width: 140, height: 44 },
+        isClickable: true,
+        isDead: false, // Functional interactive button
+        target: undefined,
+        isExternal: false,
+        opensInNewTab: false,
+        isDisabled: false,
+        overlaps: false
+      },
+      {
+        text: 'Previous project',
+        selector: 'a.prev-btn',
+        box: { x: 300, y: 400, width: 140, height: 44 },
+        isClickable: true,
+        isDead: false,
+        target: '#case-study-prev',
+        isExternal: false,
+        opensInNewTab: false,
+        isDisabled: false,
+        overlaps: false
+      }
+    ]
+  };
+
+  const res = analyzeButtonsCtas(mockMetrics);
+  const deadIssues = res.issues.filter((i) => i.title.includes('Dead / Empty Button Action'));
+  assert.strictEqual(deadIssues.length, 0, 'No dead button issue for functional Next project buttons');
+});
+
 // 8. Test Links Analyzer (Social media links in new tab, tel, mailto)
 test('Links Analyzer Flags Social Links Not Opening in New Tab', () => {
   const mockMetrics: any = {
@@ -275,6 +312,68 @@ test('Images & Media Analyzer Flags Heavy Raster Images (>= 1MB) and Ignores < 1
   assert.ok(res.issues[0].title.includes('large-banner.jpg'));
   assert.ok(res.issues[0].title.includes('Compressed to WebP'));
   assert.ok(res.issues[0].problem.includes('1.80 MB'));
+});
+
+// 9b. Test Images & Media Analyzer (Broken image only shown when actually broken)
+test('Images & Media Analyzer Flags Broken Images Only When Actually Broken', () => {
+  const mockMetrics: any = {
+    url: 'https://example.com/products',
+    images: [
+      {
+        src: 'https://example.com/broken-photo.jpg',
+        selector: 'img.broken',
+        alt: 'Broken photo',
+        hasAlt: true,
+        isDecorative: false,
+        isBroken: true,
+        isHeavyRaster: false,
+        fileSizeBytes: 0,
+        format: 'jpg',
+        naturalWidth: 0,
+        naturalHeight: 0,
+        displayWidth: 0,
+        displayHeight: 0,
+        box: { x: 0, y: 0, width: 0, height: 0 }
+      },
+      {
+        src: 'https://example.com/valid-rendered.png',
+        selector: 'img.working',
+        alt: 'Working photo',
+        hasAlt: true,
+        isDecorative: false,
+        isBroken: false, // Working image
+        isHeavyRaster: false,
+        fileSizeBytes: 120000,
+        format: 'png',
+        naturalWidth: 400,
+        naturalHeight: 300,
+        displayWidth: 400,
+        displayHeight: 300,
+        box: { x: 0, y: 0, width: 400, height: 300 }
+      },
+      {
+        src: 'https://example.com/logo.svg',
+        selector: 'img.logo',
+        alt: 'Logo',
+        hasAlt: true,
+        isDecorative: false,
+        isBroken: false, // SVG with 0 natural dimensions but valid asset
+        isHeavyRaster: false,
+        fileSizeBytes: 15000,
+        format: 'svg',
+        naturalWidth: 0,
+        naturalHeight: 0,
+        displayWidth: 150,
+        displayHeight: 50,
+        box: { x: 10, y: 10, width: 150, height: 50 }
+      }
+    ]
+  };
+
+  const res = analyzeImagesMedia(mockMetrics);
+  const brokenIssues = res.issues.filter((i) => i.title.includes('Broken Image Asset'));
+  assert.strictEqual(brokenIssues.length, 1, 'Only the actually broken image is flagged');
+  assert.ok(brokenIssues[0].title.includes('broken-photo.jpg'));
 });
 
 // 10. Test SEO – On Page Analyzer

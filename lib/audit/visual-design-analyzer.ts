@@ -89,7 +89,7 @@ export function analyzeVisualDesign(metrics: PageMetricsData): { score: number; 
       issueId: 'VIS-005',
       pageUrl,
       category: 'visual-design',
-      severity: 'medium',
+      severity: 'low',
       status: 'FAIL',
       title: 'Inappropriate Text Line Heights (Too Cramped or Too Excessive)',
       problem: `Found ${metrics.lineHeightsOutOfRangeCount} text elements with line heights outside comfortable reading range (<1.1 or >2.2 ratio).`,

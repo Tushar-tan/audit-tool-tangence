@@ -124,8 +124,11 @@ export async function generateXlsxReport(
   t2.alignment = { vertical: 'middle', horizontal: 'center' };
   coverSh.getRow(2).height = 28;
 
+  const authSubtitle = audit.authType && audit.authType !== 'public' 
+    ? `   |   Auth: ${audit.authType === 'credentials' ? 'Credentials' : 'Manual'} (${audit.authStatus || 'active'}, ${audit.authPagesAuthenticated ?? 0} pages)`
+    : '';
   const t3 = coverSh.getCell('A3');
-  t3.value = `Domain: ${audit.domain}   |   Date: ${new Date(audit.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}`;
+  t3.value = `Domain: ${audit.domain}${authSubtitle}   |   Date: ${new Date(audit.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}`;
   t3.font = { name: 'Calibri', size: 10, color: { argb: `FF${CLR.muted}` } };
   t3.fill = fill(CLR.headerBg);
   t3.alignment = { vertical: 'middle', horizontal: 'center' };

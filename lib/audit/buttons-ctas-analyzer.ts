@@ -31,7 +31,14 @@ export function analyzeButtonsCtas(metrics: PageMetricsData): { score: number; i
     }
 
     // 2. No dead/empty buttons
-    if (btn.isDead) {
+    // Ensure button is genuinely dead:
+    // - Not an in-page fragment jump (e.g. href="#contact" or href="#project-details" where target.length > 1)
+    // - Not an interactive navigation control (e.g. "Next project", "Previous project", sliders, tabs)
+    const isFragmentTarget = Boolean(btn.target && btn.target.startsWith('#') && btn.target.length > 1);
+    const isNavigationPattern = /(next|prev|previous|slide|slider|carousel|tab|accordion|modal|filter|project)/i.test(displayName);
+    const isGenuinelyDead = btn.isDead && !isFragmentTarget && !isNavigationPattern;
+
+    if (isGenuinelyDead) {
       score -= 15;
       const deadTargetDesc = btn.target ? `empty/dead destination target (href="${btn.target}")` : 'no attached click handler, form submit action, or destination URL';
       issues.push({

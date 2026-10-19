@@ -25,8 +25,11 @@ export function analyzeImagesMedia(metrics: PageMetricsData): { score: number; i
   metrics.images.forEach((img, idx) => {
     const { filename, cleanUrl } = extractImageInfo(img.src);
 
-    // 1. No broken images
-    if (img.isBroken) {
+    // 1. No broken images - only flag if image has a valid asset source, is confirmed broken, and did not render
+    const hasValidSrc = !!img.src && img.src !== 'about:blank' && !img.src.startsWith('javascript:') && img.src !== '#';
+    const isActuallyBroken = img.isBroken && hasValidSrc && !(img.naturalWidth > 0 && img.naturalHeight > 0);
+
+    if (isActuallyBroken) {
       score -= 20;
       issues.push({
         issueId: `IMG-001-${idx}`,
@@ -35,7 +38,7 @@ export function analyzeImagesMedia(metrics: PageMetricsData): { score: number; i
         severity: 'critical',
         status: 'FAIL',
         title: `Broken Image Asset: "${filename}"`,
-        problem: `Image file "${filename}" failed to load (0px natural dimensions) or returned an HTTP error status. Image URL: ${cleanUrl}`,
+        problem: `Image file "${filename}" failed to load (returned an HTTP 4xx/5xx error or failed to render). Image URL: ${cleanUrl}`,
         expectedBehavior: 'All image elements must render valid image data without broken placeholders.',
         actualBehavior: `Failed image asset: ${cleanUrl} (Selector: ${img.selector})`,
         recommendation: `Check the image file path on the server or replace with an active media asset at: ${cleanUrl}`,

@@ -35,6 +35,7 @@ interface PageAudit {
   id: string;
   url: string;
   pageTitle: string;
+  httpStatus?: number;
   desktopScreenshot?: string;
   tabletScreenshot?: string;
   mobileScreenshot?: string;
@@ -42,6 +43,7 @@ interface PageAudit {
   annotatedScreenshot?: string;
   scoresJson: string;
   issues: Issue[];
+  authStatus?: string; // 'public' | 'authenticated' | 'auth_required' | 'auth_expired'
 }
 
 interface AuditDetails {
@@ -75,6 +77,13 @@ interface AuditDetails {
   createdAt: string;
   pageAudits: PageAudit[];
   issues: Issue[];
+  // Authentication metadata
+  authType?: string; // 'public' | 'credentials' | 'manual'
+  authLoginUrl?: string;
+  authStatus?: string; // 'not_required' | 'authenticated' | 'failed' | 'expired'
+  authPagesAuthenticated?: number;
+  authPagesFailed?: number;
+  authExpiredAt?: string;
 }
 
 const CATEGORY_NAMES: Record<string, string> = {
@@ -180,6 +189,41 @@ export default function AuditReportPage({ params }: { params: { id: string } }) 
         </button>
       </div>
 
+      {/* Authentication Summary (only shown for authenticated audits) */}
+      {audit.authType && audit.authType !== 'public' && (
+        <div className="glass-panel p-5 rounded-2xl border border-amber-500/30 bg-amber-500/5 space-y-3">
+          <div className="flex items-center gap-2">
+            <div className={`w-2.5 h-2.5 rounded-full ${audit.authStatus === 'authenticated' ? 'bg-emerald-400' : audit.authStatus === 'expired' ? 'bg-amber-400' : 'bg-rose-400'}`} />
+            <h2 className="text-sm font-bold text-amber-300 uppercase tracking-wider">Authentication</h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+              <div className="text-[10px] text-slate-500 font-medium uppercase">Status</div>
+              <div className={`text-sm font-bold mt-0.5 capitalize ${audit.authStatus === 'authenticated' ? 'text-emerald-400' : audit.authStatus === 'expired' ? 'text-amber-400' : 'text-rose-400'}`}>
+                {audit.authStatus === 'authenticated' ? '✓ Authenticated' : audit.authStatus === 'expired' ? '⚠ Session Expired' : audit.authStatus ?? '—'}
+              </div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+              <div className="text-[10px] text-slate-500 font-medium uppercase">Method</div>
+              <div className="text-sm font-bold mt-0.5 text-slate-200 capitalize">
+                {audit.authType === 'credentials' ? 'Username & Password' : audit.authType === 'manual' ? 'Manual Login' : audit.authType}
+              </div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+              <div className="text-[10px] text-slate-500 font-medium uppercase">Auth Pages</div>
+              <div className="text-sm font-bold mt-0.5 text-emerald-400">{audit.authPagesAuthenticated ?? 0}</div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+              <div className="text-[10px] text-slate-500 font-medium uppercase">Auth Failures</div>
+              <div className="text-sm font-bold mt-0.5 text-rose-400">{audit.authPagesFailed ?? 0}</div>
+            </div>
+          </div>
+          {audit.authExpiredAt && (
+            <p className="text-xs text-amber-400/80">⚠ Session expired at: <span className="font-mono">{audit.authExpiredAt}</span>. Some pages may not have been fully audited.</p>
+          )}
+        </div>
+      )}
+
       {/* 11. SUMMARY DASHBOARD */}
       <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-6">
         <h2 className="text-base font-bold text-white uppercase tracking-wider flex items-center gap-2">
@@ -272,8 +316,19 @@ export default function AuditReportPage({ params }: { params: { id: string } }) 
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
             <div>
               <span className="text-xs text-slate-400 font-semibold">Active Page Inspection:</span>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <h2 className="text-base font-bold text-white flex items-center gap-2 flex-wrap">
                 {currentPage.pageTitle || currentPage.url}
+                {currentPage.authStatus && (
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                    currentPage.authStatus === 'authenticated'
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      : currentPage.authStatus === 'public'
+                      ? 'bg-slate-700/50 text-slate-300 border border-slate-600/30'
+                      : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  }`}>
+                    {currentPage.authStatus === 'authenticated' ? '🔒 Authenticated' : currentPage.authStatus === 'public' ? '🌐 Public' : '⚠ Auth Required'}
+                  </span>
+                )}
               </h2>
               <p className="text-xs text-slate-500 font-mono">{currentPage.url}</p>
             </div>
@@ -482,12 +537,24 @@ export default function AuditReportPage({ params }: { params: { id: string } }) 
           <div className="space-y-6 min-w-0">
             {uniquePages.map((pageUrl) => {
               const pageIssues = filteredIssues.filter((i) => i.pageUrl === pageUrl);
+              const matchingPage = pageAudits.find((p) => p.url === pageUrl);
               return (
                 <div key={pageUrl} className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4 min-w-0 overflow-hidden">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3 min-w-0">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
                       <Globe className="w-4 h-4 text-brand-400 shrink-0" />
                       <span className="font-mono text-sm font-bold text-white break-all min-w-0">{pageUrl}</span>
+                      {matchingPage?.authStatus && (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase shrink-0 ${
+                          matchingPage.authStatus === 'authenticated'
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                            : matchingPage.authStatus === 'public'
+                            ? 'bg-slate-700/50 text-slate-300 border border-slate-600/30'
+                            : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                        }`}>
+                          {matchingPage.authStatus === 'authenticated' ? '🔒 Auth' : matchingPage.authStatus === 'public' ? '🌐 Public' : '⚠ Auth Required'}
+                        </span>
+                      )}
                     </div>
                     <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-brand-500/20 text-brand-300 shrink-0">
                       {pageIssues.length} {pageIssues.length === 1 ? 'Issue' : 'Issues'}

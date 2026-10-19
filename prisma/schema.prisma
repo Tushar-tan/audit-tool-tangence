@@ -57,6 +57,14 @@ model Audit {
   mediumIssuesCount      Int      @default(0)
   lowIssuesCount         Int      @default(0)
   
+  // Authentication metadata (credentials are NEVER stored — only auth type/status)
+  authType               String   @default("public")  // "public" | "credentials" | "manual"
+  authLoginUrl           String?  // Login URL (no credentials stored)
+  authStatus             String   @default("not_required") // "not_required" | "authenticated" | "failed" | "expired"
+  authPagesAuthenticated Int      @default(0)
+  authPagesFailed        Int      @default(0)
+  authExpiredAt          String?  // URL where auth expired, if applicable
+
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
@@ -83,6 +91,9 @@ model PageAudit {
   
   metricsJson         String       // Raw performance & DOM metrics JSON
   scoresJson          String       // 10-category scores JSON
+  
+  // Authentication status for this specific page
+  authStatus          String       @default("public") // "public" | "authenticated" | "auth_required" | "auth_expired"
   
   createdAt           DateTime     @default(now())
   issues              AuditIssue[]
@@ -131,3 +142,23 @@ model CrawlLog {
   message   String
   timestamp DateTime @default(now())
 }
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auditQueue } from '@/lib/queue/job-queue';
-import { AuditConfig } from '@/lib/types/audit';
+import { AuditConfig, AuthenticationConfig } from '@/lib/types/audit';
 
 export async function GET(req: NextRequest) {
   try {
@@ -39,8 +39,12 @@ export async function POST(req: NextRequest) {
       maxDepth = 2,
       respectRobotsTxt = true,
       excludePatterns = [],
+      includePatterns = [],
       enableAiAnalysis = true,
-      apiKey = ''
+      apiKey = '',
+      // Authentication fields (optional)
+      authentication = null,
+      testSessionId,
     } = body;
 
     if (!siteName || !domain || !inputMethod || !inputs || !Array.isArray(inputs) || inputs.length === 0) {
@@ -50,14 +54,53 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Validate authentication config if provided
+    let authConfig: AuthenticationConfig | undefined;
+    if (authentication && authentication.method) {
+      if (!authentication.loginUrl) {
+        return NextResponse.json(
+          { error: 'Authentication requires a login URL.' },
+          { status: 400 }
+        );
+      }
+      if (authentication.method === 'credentials' && !authentication.username) {
+        return NextResponse.json(
+          { error: 'Credential authentication requires a username.' },
+          { status: 400 }
+        );
+      }
+
+      // Build auth config — password is passed through memory only, never stored to DB
+      authConfig = {
+        method: authentication.method,
+        loginUrl: authentication.loginUrl,
+        username: authentication.username,
+        password: authentication.password, // held in memory, never persisted
+        usernameSelector: authentication.usernameSelector || undefined,
+        passwordSelector: authentication.passwordSelector || undefined,
+        submitSelector: authentication.submitSelector || undefined,
+        successUrl: authentication.successUrl || undefined,
+        successSelector: authentication.successSelector || undefined,
+        failureSelector: authentication.failureSelector || undefined,
+        additionalWaitMs: authentication.additionalWaitMs ? Number(authentication.additionalWaitMs) : undefined,
+      };
+    }
+
     const config: AuditConfig = {
       maxPages: Number(maxPages),
       maxDepth: Number(maxDepth),
       respectRobotsTxt: Boolean(respectRobotsTxt),
       excludePatterns: Array.isArray(excludePatterns) ? excludePatterns : [],
-      includePatterns: [],
+      includePatterns: Array.isArray(includePatterns) ? includePatterns : [],
       enableAiAnalysis: Boolean(enableAiAnalysis),
-      apiKey
+      apiKey,
+      authentication: authConfig,
+    };
+
+    // Create DB record — NOTE: configJson does NOT store the password
+    const configForDb = { ...config, authentication: authConfig
+      ? { ...authConfig, password: undefined }
+      : undefined
     };
 
     const audit = await prisma.audit.create({
@@ -65,18 +108,23 @@ export async function POST(req: NextRequest) {
         siteName,
         domain,
         inputMethod,
-        configJson: JSON.stringify(config),
+        configJson: JSON.stringify(configForDb),
         status: 'queued',
-        progressPercentage: 0
+        progressPercentage: 0,
+        authType: authConfig?.method ?? 'public',
+        authLoginUrl: authConfig?.loginUrl ?? null,
+        authStatus: authConfig ? 'not_required' : 'not_required',
       }
     });
 
     // Add to asynchronous background job queue
+    // Pass the full config (with password in memory) to the queue
     auditQueue.addJob({
       auditId: audit.id,
       inputMethod,
       inputs,
-      config
+      config, // contains password in memory — never written to DB
+      testSessionId,
     });
 
     return NextResponse.json(audit, { status: 201 });
