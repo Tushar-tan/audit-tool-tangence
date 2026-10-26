@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Settings, Key, Sliders, ShieldCheck, Check, HardDrive, Trash2, RefreshCw, Clock } from 'lucide-react';
+import { Settings, Key, Sliders, ShieldCheck, Check, HardDrive, Trash2, RefreshCw, Clock, Cloud, ExternalLink, Zap } from 'lucide-react';
 
 export default function SettingsPage() {
   const [geminiKey, setGeminiKey] = useState('');
@@ -9,7 +9,7 @@ export default function SettingsPage() {
   const [agencyName, setAgencyName] = useState('Tangence Audit Tool');
   const [saved, setSaved] = useState(false);
 
-  // Storage cleanup states
+  // Storage cleanup & cloud hosting states
   const [storageStats, setStorageStats] = useState<{
     totalAudits: number;
     totalFiles: number;
@@ -18,6 +18,7 @@ export default function SettingsPage() {
     retentionDays: number;
     expiredAuditsCount: number;
   } | null>(null);
+  const [imgbbEnabled, setImgbbEnabled] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
   const [cleanupMessage, setCleanupMessage] = useState<string | null>(null);
 
@@ -27,6 +28,9 @@ export default function SettingsPage() {
       const data = await res.json();
       if (data.success && data.stats) {
         setStorageStats(data.stats);
+      }
+      if (typeof data.imgbbEnabled === 'boolean') {
+        setImgbbEnabled(data.imgbbEnabled);
       }
     } catch {
       // ignore
@@ -126,6 +130,50 @@ export default function SettingsPage() {
               onChange={(e) => setAgencyName(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-100 text-xs focus:outline-none focus:border-brand-500"
             />
+          </div>
+        </div>
+
+        {/* Direct Cloud Screenshot Hosting (Lightshot style / imgBB) */}
+        <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Cloud className="w-4 h-4 text-sky-400" /> Cloud Screenshot Hosting (Direct URLs)
+            </h2>
+            {imgbbEnabled ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 w-fit">
+                <Zap className="w-3 h-3" /> Cloud Hosting Active (0 MB Disk Usage)
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 w-fit">
+                Local Disk Mode (Fallback)
+              </span>
+            )}
+          </div>
+
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Upload screenshots directly to cloud hosting (generating public CDN URLs like Lightshot / imgBB) instead of storing PNG files on your server. Screenshots consume <strong>0 MB of local disk space</strong> and automatically delete from the cloud after <strong>3 days</strong>.
+          </p>
+
+          <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-200">Current Status</span>
+              <span className={`font-mono font-semibold ${imgbbEnabled ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {imgbbEnabled ? 'Configured & Active (IMGBB_API_KEY detected)' : 'Not Configured (Using local disk storage)'}
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-400 leading-relaxed pt-1.5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <span>
+                To enable, add <code className="text-sky-300 bg-slate-800 px-1.5 py-0.5 rounded font-mono">IMGBB_API_KEY=&quot;your_key&quot;</code> to your <code className="text-slate-300">.env</code> or Vercel Environment Variables.
+              </span>
+              <a
+                href="https://api.imgbb.com"
+                target="_blank"
+                rel="noreferrer"
+                className="text-sky-400 hover:text-sky-300 underline inline-flex items-center gap-1 font-semibold"
+              >
+                Get Free API Key <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
           </div>
         </div>
 

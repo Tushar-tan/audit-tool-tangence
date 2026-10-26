@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cleanupOldScreenshots, getScreenshotStorageStats } from '@/lib/storage/screenshot-cleanup';
+import { isImgBBEnabled } from '@/lib/storage/imgbb-uploader';
 
 export async function GET(req: NextRequest) {
   try {
@@ -8,7 +9,11 @@ export async function GET(req: NextRequest) {
     const retentionDays = daysParam ? Number(daysParam) : undefined;
 
     const stats = await getScreenshotStorageStats(retentionDays);
-    return NextResponse.json({ success: true, stats });
+    return NextResponse.json({
+      success: true,
+      stats,
+      imgbbEnabled: isImgBBEnabled()
+    });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

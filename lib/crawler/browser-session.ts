@@ -2,6 +2,7 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 import fs from 'fs/promises';
 import path from 'path';
 import { PageMetricsData, ResponsiveViewportCheck, ElementBox } from '../types/audit';
+import { uploadToImgBB, isImgBBEnabled } from '../storage/imgbb-uploader';
 
 export interface PageCaptureResult {
   url: string;
@@ -267,25 +268,62 @@ async function internalExtractPageData(
   // 1. Ensure frontend has fully settled (SPA hydration, web fonts, lazy scroll)
   await waitForFrontendToSettle(page);
 
+  /**
+   * captureScreenshot: captures a Puppeteer screenshot and either:
+   *   (a) uploads it to imgBB (if IMGBB_API_KEY is set) → returns public URL
+   *   (b) saves to local disk under public/uploads/screenshots/ → returns relative path
+   */
+  const captureScreenshot = async (
+    captureOpts: { fullPage?: boolean },
+    localRelPath: string,
+    imgbbName: string
+  ): Promise<string> => {
+    if (isImgBBEnabled()) {
+      // Cloud path: capture to buffer, upload to imgBB
+      const buf = await page.screenshot({ ...captureOpts, encoding: 'binary' }) as Buffer;
+      const result = await uploadToImgBB(buf, imgbbName);
+      if (result) {
+        return result.url; // e.g. https://i.ibb.co/xxxx/image.png
+      }
+      // Fall through to local if upload failed
+    }
+    // Local disk path
+    const absPath = path.join(process.cwd(), 'public', localRelPath);
+    await page.screenshot({ ...captureOpts, path: absPath });
+    return localRelPath;
+  };
+
   // 1. Capture Desktop Viewport (1920x1080)
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
-  const desktopRelPath = `/uploads/screenshots/${auditId}/p${pageIndex}_1920.png`;
-  await page.screenshot({ path: path.join(process.cwd(), 'public', desktopRelPath) });
+  const desktopRelPath = await captureScreenshot(
+    {},
+    `/uploads/screenshots/${auditId}/p${pageIndex}_1920.png`,
+    `audit_${auditId}_p${pageIndex}_desktop`
+  );
 
   // 2. Capture Tablet Viewport (768x1024)
   await page.setViewport({ width: 768, height: 1024, deviceScaleFactor: 1 });
-  const tabletRelPath = `/uploads/screenshots/${auditId}/p${pageIndex}_768.png`;
-  await page.screenshot({ path: path.join(process.cwd(), 'public', tabletRelPath) });
+  const tabletRelPath = await captureScreenshot(
+    {},
+    `/uploads/screenshots/${auditId}/p${pageIndex}_768.png`,
+    `audit_${auditId}_p${pageIndex}_tablet`
+  );
 
   // 3. Capture Mobile Viewport (390x844)
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
-  const mobileRelPath = `/uploads/screenshots/${auditId}/p${pageIndex}_390.png`;
-  await page.screenshot({ path: path.join(process.cwd(), 'public', mobileRelPath) });
+  const mobileRelPath = await captureScreenshot(
+    {},
+    `/uploads/screenshots/${auditId}/p${pageIndex}_390.png`,
+    `audit_${auditId}_p${pageIndex}_mobile`
+  );
 
   // 4. Capture Full Page Screenshot
   await page.setViewport({ width: 1920, height: 1080 });
-  const fullPageRelPath = `/uploads/screenshots/${auditId}/p${pageIndex}_full.png`;
-  await page.screenshot({ path: path.join(process.cwd(), 'public', fullPageRelPath), fullPage: true });
+  const fullPageRelPath = await captureScreenshot(
+    { fullPage: true },
+    `/uploads/screenshots/${auditId}/p${pageIndex}_full.png`,
+    `audit_${auditId}_p${pageIndex}_fullpage`
+  );
 
   // Test across all 13 viewports for responsive issues
   const viewportChecks: ResponsiveViewportCheck[] = [];
@@ -441,8 +479,18 @@ async function internalExtractPageData(
     if (vpMetrics.hasHorizontalScroll || vpMetrics.cutOffElements.length > 0) {
       const vpRel = `/uploads/screenshots/${auditId}/p${pageIndex}_vp_${vp.width}.png`;
       try {
-        await page.screenshot({ path: path.join(process.cwd(), 'public', vpRel) });
-        vpScreenshotPath = vpRel;
+        if (isImgBBEnabled()) {
+          const buf = await page.screenshot({ encoding: 'binary' }) as Buffer;
+          const result = await uploadToImgBB(buf, `audit_${auditId}_p${pageIndex}_vp${vp.width}`);
+          vpScreenshotPath = result?.url ?? vpRel;
+          if (!result) {
+            // Fall back to local if imgBB failed
+            await page.screenshot({ path: path.join(process.cwd(), 'public', vpRel) });
+          }
+        } else {
+          await page.screenshot({ path: path.join(process.cwd(), 'public', vpRel) });
+          vpScreenshotPath = vpRel;
+        }
       } catch {
         // ignore
       }

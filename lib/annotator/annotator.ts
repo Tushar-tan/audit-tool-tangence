@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { AuditIssueData } from '../types/audit';
+import { uploadToImgBB, isImgBBEnabled } from '../storage/imgbb-uploader';
 
 export async function generateAnnotatedScreenshot(
   auditId: string,
@@ -8,17 +9,6 @@ export async function generateAnnotatedScreenshot(
   desktopScreenshotRelPath: string,
   issues: AuditIssueData[]
 ): Promise<string> {
-  const inputAbsPath = path.join(process.cwd(), 'public', desktopScreenshotRelPath);
-  const outputRelPath = `/uploads/screenshots/${auditId}/p${pageIndex}_annotated.png`;
-  const outputAbsPath = path.join(process.cwd(), 'public', outputRelPath);
-
-  try {
-    // Check if base desktop screenshot exists
-    await fs.access(inputAbsPath);
-  } catch {
-    return desktopScreenshotRelPath; // Fallback if image unavailable
-  }
-
   // Filter issues with bounding box coordinates
   const visualIssues = issues.filter((i) => i.elementBox && i.elementBox.width > 0);
 
@@ -90,12 +80,38 @@ export async function generateAnnotatedScreenshot(
 
   svgContent += `</g></svg>`;
 
+  // If imgBB is enabled, upload the SVG as a buffer directly to imgBB
+  if (isImgBBEnabled()) {
+    try {
+      const svgBuffer = Buffer.from(svgContent, 'utf-8');
+      const result = await uploadToImgBB(svgBuffer, `audit_${auditId}_p${pageIndex}_annotated`);
+      if (result) {
+        return result.url;
+      }
+    } catch (err) {
+      console.warn('[Annotator] imgBB SVG upload failed, falling back to local:', (err as Error).message);
+    }
+  }
+
+  // Local disk fallback
+  const inputAbsPath = path.join(process.cwd(), 'public', desktopScreenshotRelPath);
+
+  // For local mode, check if base desktop screenshot actually exists on disk
+  if (!desktopScreenshotRelPath.startsWith('http')) {
+    try {
+      await fs.access(inputAbsPath);
+    } catch {
+      return desktopScreenshotRelPath; // Fallback if image unavailable
+    }
+  }
+
   try {
     const svgRelPath = `/uploads/screenshots/${auditId}/p${pageIndex}_annotated.svg`;
     const svgAbsPath = path.join(process.cwd(), 'public', svgRelPath);
     await fs.writeFile(svgAbsPath, svgContent, 'utf-8');
 
     // Also copy base screenshot to annotated PNG
+    const outputAbsPath = path.join(process.cwd(), 'public', `/uploads/screenshots/${auditId}/p${pageIndex}_annotated.png`);
     await fs.copyFile(inputAbsPath, outputAbsPath);
 
     return svgRelPath;
