@@ -5,7 +5,7 @@ import {
   Download, Filter, Monitor, Tablet as TabletIcon, Smartphone, 
   ShieldCheck, AlertTriangle, Zap, CheckCircle2, FileText, ChevronDown, 
   Code, Layers, Layout, Globe, Search, ArrowRight, ExternalLink, ImageOff,
-  Image as ImageIcon, MousePointerClick
+  Image as ImageIcon, MousePointerClick, Clock
 } from 'lucide-react';
 
 interface Issue {
@@ -120,6 +120,7 @@ export default function AuditReportPage({ params }: { params: { id: string } }) 
 
   // Export Modal
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
+  const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     fetch(`/api/audits/${params.id}`)
@@ -364,27 +365,43 @@ export default function AuditReportPage({ params }: { params: { id: string } }) 
 
           {/* Screenshot Display Frame */}
           <div className="relative rounded-xl bg-slate-950 border border-slate-800 overflow-hidden flex items-center justify-center p-4 min-h-[400px]">
-            {viewportMode === 'desktop' && currentPage.desktopScreenshot && (
-              <img
-                src={currentPage.desktopScreenshot}
-                alt="Desktop Screenshot"
-                className="max-h-[600px] w-auto rounded border border-slate-800 shadow-2xl object-contain"
-              />
-            )}
-            {viewportMode === 'tablet' && currentPage.tabletScreenshot && (
-              <img
-                src={currentPage.tabletScreenshot}
-                alt="Tablet Screenshot"
-                className="max-h-[600px] w-auto rounded border border-slate-800 shadow-2xl object-contain"
-              />
-            )}
-            {viewportMode === 'mobile' && currentPage.mobileScreenshot && (
-              <img
-                src={currentPage.mobileScreenshot}
-                alt="Mobile Screenshot"
-                className="max-h-[600px] w-auto rounded border border-slate-800 shadow-2xl object-contain"
-              />
-            )}
+            {(() => {
+              const currentScreenshot =
+                viewportMode === 'desktop'
+                  ? currentPage.desktopScreenshot
+                  : viewportMode === 'tablet'
+                  ? currentPage.tabletScreenshot
+                  : currentPage.mobileScreenshot;
+
+              const isFailed = !currentScreenshot || imgFailed[currentScreenshot];
+
+              if (isFailed) {
+                return (
+                  <div className="flex flex-col items-center justify-center p-8 text-center max-w-md mx-auto space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400 shadow-inner">
+                      <Clock className="w-6 h-6 text-brand-400" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-slate-200">Screenshot Automatically Archived</p>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Screenshots are automatically pruned after 3 days to maintain optimal disk storage. All 11 checklist evaluation scores, issues, and AI recommendations remain permanently preserved.
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <img
+                  src={currentScreenshot}
+                  alt={`${viewportMode} Screenshot`}
+                  onError={() => {
+                    setImgFailed((prev) => ({ ...prev, [currentScreenshot]: true }));
+                  }}
+                  className="max-h-[600px] w-auto rounded border border-slate-800 shadow-2xl object-contain"
+                />
+              );
+            })()}
           </div>
         </div>
       )}

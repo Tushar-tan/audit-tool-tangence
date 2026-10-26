@@ -17,7 +17,8 @@ export async function middleware(request: NextRequest) {
     pathname === '/api/auth/login' ||
     pathname === '/api/auth/signup' ||
     pathname === '/api/auth/logout' ||
-    pathname === '/api/auth/test' // crawler internal test tool
+    pathname === '/api/auth/test' || // crawler internal test tool
+    pathname === '/api/cron/cleanup'
   ) {
     return NextResponse.next();
   }

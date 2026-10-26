@@ -30,9 +30,9 @@ yarn-error.log*
 *.db-journal
 !prisma/template.db
 
-# generated screenshots
-public/uploads/screenshots/*
-!public/uploads/screenshots/.gitkeep
+# generated screenshots and uploads
+public/uploads/**/*
+!public/uploads/**/.gitkeep
 
 # typescript
 *.tsbuildinfo

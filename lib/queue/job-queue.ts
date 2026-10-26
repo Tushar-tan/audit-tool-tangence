@@ -8,6 +8,10 @@ import {
   establishAuditSession,
   destroyAuditSession,
 } from '../crawler/auth-engine';
+import {
+  startPeriodicScreenshotCleanup,
+  cleanupOldScreenshots
+} from '../storage/screenshot-cleanup';
 
 interface QueueJob {
   auditId: string;
@@ -21,9 +25,17 @@ interface QueueJob {
 class AuditJobQueue {
   private activeJobs: Set<string> = new Set();
 
+  constructor() {
+    // Start periodic background screenshot pruning (3-day retention)
+    startPeriodicScreenshotCleanup();
+  }
+
   public async addJob(job: QueueJob) {
     if (this.activeJobs.has(job.auditId)) return;
     this.activeJobs.add(job.auditId);
+
+    // Opportunistically prune old screenshots (>3 days) in background
+    cleanupOldScreenshots().catch(() => {});
 
     // Process asynchronously in background
     setImmediate(() => {
@@ -325,6 +337,9 @@ class AuditJobQueue {
       await this.addLog(auditId, 'success', `Authenticated pages crawled: ${authPagesAuthenticated} | Failed: ${authPagesFailed}`);
     }
     this.activeJobs.delete(auditId);
+
+    // Prune expired screenshots after audit completes
+    cleanupOldScreenshots().catch(() => {});
   }
 
   private async addLog(auditId: string, level: string, message: string) {
